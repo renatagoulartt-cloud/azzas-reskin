@@ -1,6 +1,7 @@
 // ============================================================
-// Azzas Re-skin Multi-marca — v9
-// Fix: hardcoded ID first, scan ALL frames, prefer by name
+// Azzas Re-skin Multi-marca — v10
+// Fix: try ALL strategies, pick collection with MOST modes
+// so newly-published modes (e.g. Fábula) are not missed.
 // ============================================================
 
 figma.showUI(__html__, { width: 400, height: 520, themeColors: true });
@@ -36,17 +37,19 @@ async function safeGetCollection(id) {
 // ── Detection (3 strategies) ────────────────────────────────
 
 async function detectCollection() {
-  // Strategy 1 — hardcoded known ID (instant, avoids ordering issues)
+  var results = [];   // { collection, source }
+
+  // Strategy 1 — hardcoded known ID
   console.log("[Re-skin] Strategy 1: trying hardcoded ID...");
   var coll = await safeGetCollection(KNOWN_TOKENS_WEB_ID);
   if (coll && coll.modes.length >= MIN_MODES) {
-    console.log("[Re-skin] ✓ Found via hardcoded ID: \"" + coll.name + "\" (" + coll.modes.length + " modes)");
-    return coll;
+    console.log("[Re-skin] ✓ Hardcoded ID: \"" + coll.name + "\" (" + coll.modes.length + " modes)");
+    results.push({ collection: coll, source: "hardcoded" });
+  } else {
+    console.log("[Re-skin] Hardcoded ID miss.");
   }
-  console.log("[Re-skin] Hardcoded ID miss.");
 
   // Strategy 2 — scan resolvedVariableModes on ALL top-level frames
-  // (v8 only checked the FIRST frame — if that frame had no tokens, it failed)
   console.log("[Re-skin] Strategy 2: scanning all frames on current page...");
   var page = figma.currentPage;
   var candidateIds = {};
@@ -64,63 +67,79 @@ async function detectCollection() {
   var ids = Object.keys(candidateIds);
   console.log("[Re-skin] Found " + ids.length + " unique collectionIds across all frames.");
 
-  // Test each candidate — prefer "Tokens WEB" by name, else pick most modes
-  var best = null;
+  var bestFrame = null;
   for (var c = 0; c < ids.length; c++) {
     console.log("[Re-skin] Testing [" + c + "] " + ids[c] + "...");
-
     var candidate = await safeGetCollection(ids[c]);
     if (!candidate) {
       console.log("[Re-skin]   → null (could not resolve)");
       continue;
     }
-
     console.log("[Re-skin]   → \"" + candidate.name + "\" with " + candidate.modes.length + " modes");
-
     if (candidate.modes.length < MIN_MODES) continue;
-
-    // Exact name match = instant win
-    if (candidate.name === "Tokens WEB") return candidate;
-
-    // Otherwise track the one with most modes
-    if (!best || candidate.modes.length > best.modes.length) {
-      best = candidate;
+    if (candidate.name === "Tokens WEB") {
+      bestFrame = candidate;
+      break;
+    }
+    if (!bestFrame || candidate.modes.length > bestFrame.modes.length) {
+      bestFrame = candidate;
     }
   }
-
-  if (best) {
-    console.log("[Re-skin] ✓ Best match: \"" + best.name + "\" (" + best.modes.length + " modes)");
-    return best;
+  if (bestFrame) {
+    console.log("[Re-skin] ✓ Frame best: \"" + bestFrame.name + "\" (" + bestFrame.modes.length + " modes)");
+    results.push({ collection: bestFrame, source: "frame-scan" });
   }
 
-  // Strategy 3 — library API fallback (known to not return "Tokens WEB" in
-  // some setups, but worth trying)
+  // Strategy 3 — library API (may return updated modes not yet in local cache)
   console.log("[Re-skin] Strategy 3: trying library API...");
   try {
     var libs = await withTimeout(
       figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync(),
       5000
     );
+    console.log("[Re-skin] Library collections found: " + libs.length);
     for (var l = 0; l < libs.length; l++) {
+      console.log("[Re-skin]   lib[" + l + "]: \"" + libs[l].name + "\"");
       if (libs[l].name === "Tokens WEB") {
         var imported = await withTimeout(
           figma.teamLibrary.getVariablesInLibraryCollectionAsync(libs[l].key),
           10000
         );
+        console.log("[Re-skin]   Variables in lib: " + imported.length);
         if (imported.length > 0) {
           var v = await withTimeout(
             figma.variables.importVariableByKeyAsync(imported[0].key),
             5000
           );
           if (v && v.variableCollectionId) {
-            return await safeGetCollection(v.variableCollectionId);
+            var libColl = await safeGetCollection(v.variableCollectionId);
+            if (libColl && libColl.modes.length >= MIN_MODES) {
+              console.log("[Re-skin] ✓ Library API: \"" + libColl.name + "\" (" + libColl.modes.length + " modes)");
+              results.push({ collection: libColl, source: "library-api" });
+            }
           }
         }
       }
     }
-  } catch (_) {}
+  } catch (e) {
+    console.log("[Re-skin] Strategy 3 error: " + e.message);
+  }
 
-  return null;
+  // Pick collection with the MOST modes (most up-to-date)
+  if (results.length === 0) return null;
+
+  var winner = results[0];
+  for (var r = 1; r < results.length; r++) {
+    if (results[r].collection.modes.length > winner.collection.modes.length) {
+      winner = results[r];
+    }
+  }
+
+  console.log("[Re-skin] ✓ Winner: \"" + winner.collection.name + "\" via " + winner.source +
+    " (" + winner.collection.modes.length + " modes: " +
+    winner.collection.modes.map(function(m) { return m.name; }).join(", ") + ")");
+
+  return winner.collection;
 }
 
 // ── Init ────────────────────────────────────────────────────
