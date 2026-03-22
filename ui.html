@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #333333;
+    --muted: #888888;
+    --accent: #0d99ff;
+    --accent-hover: #0b85e0;
+    --border: #e0e0e0;
+    --success: #14ae5c;
+    --error: #f24822;
+    --card-bg: #f5f5f5;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13px;
+    color: var(--fg);
+    background: var(--bg);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 100vh;
+  }
+
+  h1 {
+    font-size: 16px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  h1 .badge {
+    font-size: 10px;
+    font-weight: 600;
+    background: var(--accent);
+    color: #fff;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+
+  .section { display: flex; flex-direction: column; gap: 8px; }
+
+  label { font-weight: 600; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--fg);
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+
+  select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+
+  button {
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+
+  .btn-secondary {
+    background: var(--card-bg);
+    color: var(--fg);
+  }
+  .btn-secondary:hover { background: var(--border); }
+
+  .info-card {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .info-card strong { color: var(--fg); }
+
+  /* Progress */
+  .progress-container { display: none; flex-direction: column; gap: 8px; }
+  .progress-container.active { display: flex; }
+
+  .progress-bar-outer {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-bar-inner {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+
+  .progress-label { font-size: 12px; color: var(--muted); }
+
+  /* Report */
+  .report { display: none; flex-direction: column; gap: 8px; }
+  .report.active { display: flex; }
+
+  .report-stat {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--card-bg);
+    border-radius: 6px;
+  }
+
+  .report-stat .value { font-weight: 700; }
+  .report-stat.success .value { color: var(--success); }
+  .report-stat.error .value { color: var(--error); }
+
+  .error-list {
+    max-height: 100px;
+    overflow-y: auto;
+    font-size: 11px;
+    color: var(--error);
+    padding: 8px;
+    background: #fff5f5;
+    border-radius: 6px;
+  }
+
+  /* Status */
+  #status {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+    min-height: 18px;
+  }
+
+  #status.error { color: var(--error); font-weight: 600; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<h1>Re-skin Multi-marca <span class="badge">Azzas</span></h1>
+
+<div id="loading-state">
+  <div class="info-card">Detectando collection "Tokens WEB"…</div>
+</div>
+
+<div id="main-state" class="hidden">
+  <div class="section">
+    <div class="info-card">
+      <strong id="collection-name"></strong><br>
+      <span id="collection-meta"></span>
+    </div>
+  </div>
+
+  <div class="section">
+    <label for="brand-select">Marca destino</label>
+    <select id="brand-select">
+      <option value="" disabled selected>Selecione a marca…</option>
+    </select>
+  </div>
+
+  <button id="btn-swap" class="btn-primary" disabled>Aplicar re-skin</button>
+
+  <div id="progress" class="progress-container">
+    <div class="progress-bar-outer"><div id="progress-bar" class="progress-bar-inner"></div></div>
+    <div id="progress-label" class="progress-label"></div>
+  </div>
+
+  <div id="report" class="report">
+    <label>Relatório</label>
+    <div class="report-stat success">
+      <span>Páginas alteradas</span>
+      <span class="value" id="report-pages">0</span>
+    </div>
+    <div class="report-stat success">
+      <span>Frames alterados</span>
+      <span class="value" id="report-frames">0</span>
+    </div>
+    <div id="report-errors-container" class="hidden">
+      <div class="report-stat error">
+        <span>Erros</span>
+        <span class="value" id="report-error-count">0</span>
+      </div>
+      <div id="report-error-list" class="error-list"></div>
+    </div>
+  </div>
+
+  <button id="btn-close" class="btn-secondary hidden">Fechar</button>
+</div>
+
+<div id="status"></div>
+
+<script>
+  var collectionId = null;
+  var totalPages = 0;
+
+  var select = document.getElementById("brand-select");
+  var btnSwap = document.getElementById("btn-swap");
+  var btnClose = document.getElementById("btn-close");
+
+  select.addEventListener("change", function () {
+    btnSwap.disabled = !select.value;
+  });
+
+  btnSwap.addEventListener("click", function () {
+    if (!select.value || !collectionId) return;
+    btnSwap.disabled = true;
+    select.disabled = true;
+    document.getElementById("progress").classList.add("active");
+    document.getElementById("report").classList.remove("active");
+    parent.postMessage({
+      pluginMessage: {
+        type: "swap",
+        collectionId: collectionId,
+        targetModeId: select.value,
+      }
+    }, "*");
+  });
+
+  btnClose.addEventListener("click", function () {
+    parent.postMessage({ pluginMessage: { type: "cancel" } }, "*");
+  });
+
+  window.onmessage = function (event) {
+    var msg = event.data.pluginMessage;
+    if (!msg) return;
+
+    if (msg.type === "modes-loaded") {
+      collectionId = msg.collectionId;
+      document.getElementById("loading-state").classList.add("hidden");
+      document.getElementById("main-state").classList.remove("hidden");
+      document.getElementById("collection-name").textContent = msg.collectionName;
+      document.getElementById("collection-meta").textContent =
+        msg.modes.length + " marcas disponíveis";
+
+      select.innerHTML = '<option value="" disabled selected>Selecione a marca…</option>';
+      msg.modes.forEach(function (m) {
+        var opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.name;
+        select.appendChild(opt);
+      });
+    }
+
+    if (msg.type === "swap-start") {
+      totalPages = msg.totalPages;
+      setStatus("Aplicando re-skin…");
+    }
+
+    if (msg.type === "swap-progress") {
+      var pct = Math.round((msg.currentPage / totalPages) * 100);
+      document.getElementById("progress-bar").style.width = pct + "%";
+      document.getElementById("progress-label").textContent =
+        msg.pageName + " — " + msg.framesSwapped + " frames (" + msg.currentPage + "/" + totalPages + ")";
+    }
+
+    if (msg.type === "swap-done") {
+      document.getElementById("progress").classList.remove("active");
+      document.getElementById("report").classList.add("active");
+      document.getElementById("report-pages").textContent = msg.totalPages;
+      document.getElementById("report-frames").textContent = msg.totalFrames;
+
+      if (msg.errors.length > 0) {
+        document.getElementById("report-errors-container").classList.remove("hidden");
+        document.getElementById("report-error-count").textContent = msg.errors.length;
+        document.getElementById("report-error-list").innerHTML = msg.errors
+          .map(function (e) { return "<div><strong>" + e.page + ":</strong> " + e.error + "</div>"; })
+          .join("");
+      }
+
+      btnClose.classList.remove("hidden");
+      setStatus("Re-skin concluído!");
+    }
+
+    if (msg.type === "error") {
+      document.getElementById("loading-state").classList.add("hidden");
+      document.getElementById("main-state").classList.remove("hidden");
+      setStatus(msg.message, true);
+      btnClose.classList.remove("hidden");
+    }
+  };
+
+  function setStatus(text, isError) {
+    var el = document.getElementById("status");
+    el.textContent = text;
+    el.className = isError ? "error" : "";
+  }
+</script>
+</body>
+</html>

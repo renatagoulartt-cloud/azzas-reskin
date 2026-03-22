@@ -1,0 +1,13 @@
+{
+  "name": "Azzas Re-skin Multi-marca",
+  "id": "azzas-reskin-multimarca",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "documentAccess": "dynamic-page",
+  "editorType": ["figma"],
+  "permissions": ["currentuser", "teamlibrary"],
+  "networkAccess": {
+    "allowedDomains": ["none"]
+  }
+}
