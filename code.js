@@ -1,7 +1,7 @@
 // ============================================================
-// Azzas Re-skin Multi-marca — v10
-// Fix: try ALL strategies, pick collection with MOST modes
-// so newly-published modes (e.g. Fábula) are not missed.
+// Azzas Re-skin Multi-marca — v11
+// Fix: auto-load fonts before applying modes (retry on font errors)
+// + try ALL strategies, pick collection with MOST modes
 // ============================================================
 
 figma.showUI(__html__, { width: 400, height: 520, themeColors: true });
@@ -175,6 +175,107 @@ async function detectCollection() {
   }
 })();
 
+// ── Font helpers ────────────────────────────────────────────
+
+function parseFontsFromError(errMsg) {
+  var fonts = [];
+  var regex = /unloaded font "([^"]+)"/g;
+  var match;
+  while ((match = regex.exec(errMsg)) !== null) {
+    var raw = match[1]; // e.g. "Hero New Regular", "Hero New Bold"
+    var lastSpace = raw.lastIndexOf(" ");
+    if (lastSpace > 0) {
+      fonts.push({
+        family: raw.substring(0, lastSpace),
+        style: raw.substring(lastSpace + 1)
+      });
+    }
+  }
+  return fonts;
+}
+
+async function loadFonts(fonts) {
+  for (var f = 0; f < fonts.length; f++) {
+    try {
+      await figma.loadFontAsync(fonts[f]);
+      console.log("[Re-skin] Loaded font: " + fonts[f].family + " " + fonts[f].style);
+    } catch (e) {
+      console.log("[Re-skin] Could not load font: " + fonts[f].family + " " + fonts[f].style + " — " + e.message);
+    }
+  }
+}
+
+// Collect all fonts used by text nodes in a subtree
+function collectTextFonts(node) {
+  var fonts = {};
+  if (node.type === "TEXT") {
+    var len = node.characters ? node.characters.length : 0;
+    if (len > 0) {
+      // fontName can be a single value or mixed (Symbol)
+      var fn = node.fontName;
+      if (fn && typeof fn === "object" && fn.family) {
+        var key = fn.family + "|" + fn.style;
+        fonts[key] = { family: fn.family, style: fn.style };
+      } else {
+        // Mixed fonts — get per-character (sample first, mid, last)
+        var indices = [0];
+        if (len > 1) indices.push(Math.floor(len / 2));
+        if (len > 2) indices.push(len - 1);
+        for (var s = 0; s < indices.length; s++) {
+          try {
+            var rf = node.getRangeFontName(indices[s], indices[s] + 1);
+            if (rf && rf.family) {
+              var rk = rf.family + "|" + rf.style;
+              fonts[rk] = { family: rf.family, style: rf.style };
+            }
+          } catch (_) {}
+        }
+      }
+    }
+  }
+  if ("children" in node) {
+    for (var c = 0; c < node.children.length; c++) {
+      var childFonts = collectTextFonts(node.children[c]);
+      var childKeys = Object.keys(childFonts);
+      for (var ck = 0; ck < childKeys.length; ck++) {
+        fonts[childKeys[ck]] = childFonts[childKeys[ck]];
+      }
+    }
+  }
+  return fonts;
+}
+
+// Pre-load fonts that the TARGET mode will need (from string variables)
+async function preloadFontsForTargetMode(collection, targetModeId) {
+  console.log("[Re-skin] Pre-loading fonts for target mode...");
+  try {
+    var allVars = await figma.variables.getVariablesInCollectionAsync(collection.id);
+    var fontFamilies = {};
+    for (var i = 0; i < allVars.length; i++) {
+      var v = allVars[i];
+      if (v.resolvedType === "STRING" && v.name.toLowerCase().indexOf("font") !== -1) {
+        var val = v.valuesByMode[targetModeId];
+        if (typeof val === "string" && val.length > 1 && val.length < 60) {
+          fontFamilies[val] = true;
+        }
+      }
+    }
+    var families = Object.keys(fontFamilies);
+    console.log("[Re-skin] Font families from variables: " + (families.length > 0 ? families.join(", ") : "(none)"));
+    var styles = ["Regular", "Bold", "Medium", "Light", "SemiBold", "Italic"];
+    for (var fi = 0; fi < families.length; fi++) {
+      for (var si = 0; si < styles.length; si++) {
+        try {
+          await figma.loadFontAsync({ family: families[fi], style: styles[si] });
+          console.log("[Re-skin] Pre-loaded: " + families[fi] + " " + styles[si]);
+        } catch (_) {}
+      }
+    }
+  } catch (e) {
+    console.log("[Re-skin] Pre-load scan error: " + e.message);
+  }
+}
+
 // ── Re-skin ─────────────────────────────────────────────────
 
 function findModeByName(brandName) {
@@ -198,6 +299,14 @@ async function reskin(targetBrand) {
     return report;
   }
 
+  // Pre-load fonts that the target brand mode will need
+  figma.ui.postMessage({
+    type: "progress",
+    message: "Carregando fontes...",
+    current: 0, total: 1
+  });
+  await preloadFontsForTargetMode(cachedCollection, targetModeId);
+
   figma.skipInvisibleInstanceChildren = true;
   var pages = figma.root.children;
 
@@ -219,12 +328,34 @@ async function reskin(targetBrand) {
         topFrame.type === "COMPONENT_SET" ||
         topFrame.type === "SECTION"
       ) {
-        try {
-          topFrame.setExplicitVariableModeForCollection(cachedCollection, targetModeId);
-          report.modesSwapped++;
-          report.framesProcessed++;
-        } catch (err) {
-          report.errors.push("Frame \"" + topFrame.name + "\": " + err.message);
+        // Attempt with retry on font errors
+        var applied = false;
+        for (var attempt = 0; attempt < 3 && !applied; attempt++) {
+          try {
+            topFrame.setExplicitVariableModeForCollection(cachedCollection, targetModeId);
+            report.modesSwapped++;
+            report.framesProcessed++;
+            applied = true;
+          } catch (err) {
+            var msg = err.message || "";
+            if (msg.indexOf("unloaded font") !== -1 && attempt < 2) {
+              console.log("[Re-skin] Font error on \"" + topFrame.name + "\", loading fonts (attempt " + (attempt+1) + ")...");
+              // Load fonts mentioned in the error
+              var neededFonts = parseFontsFromError(msg);
+              await loadFonts(neededFonts);
+              // Also load fonts from text nodes in this frame
+              if (attempt === 0) {
+                try {
+                  var textFonts = collectTextFonts(topFrame);
+                  var textFontList = Object.keys(textFonts).map(function(k) { return textFonts[k]; });
+                  await loadFonts(textFontList);
+                } catch (_) {}
+              }
+            } else {
+              report.errors.push("Frame \"" + topFrame.name + "\": " + msg);
+              break;
+            }
+          }
         }
       }
     }
