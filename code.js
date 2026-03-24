@@ -1,7 +1,7 @@
 // ============================================================
-// Azzas Re-skin Multi-marca — v11
-// Fix: auto-load fonts before applying modes (retry on font errors)
-// + try ALL strategies, pick collection with MOST modes
+// Azzas Re-skin Multi-marca — v12
+// Fix: apply mode RECURSIVELY to all nested frames/instances
+// + auto-load fonts with retry + try ALL strategies
 // ============================================================
 
 figma.showUI(__html__, { width: 400, height: 520, themeColors: true });
@@ -285,6 +285,53 @@ function findModeByName(brandName) {
   return mode ? mode.modeId : null;
 }
 
+// Apply mode to a single node with font-retry logic
+async function applyModeToNode(node, collection, targetModeId, report) {
+  var applied = false;
+  for (var attempt = 0; attempt < 3 && !applied; attempt++) {
+    try {
+      node.setExplicitVariableModeForCollection(collection, targetModeId);
+      report.modesSwapped++;
+      applied = true;
+    } catch (err) {
+      var msg = err.message || "";
+      if (msg.indexOf("unloaded font") !== -1 && attempt < 2) {
+        console.log("[Re-skin] Font error on \"" + node.name + "\", loading fonts (attempt " + (attempt+1) + ")...");
+        var neededFonts = parseFontsFromError(msg);
+        await loadFonts(neededFonts);
+        if (attempt === 0) {
+          try {
+            var textFonts = collectTextFonts(node);
+            var textFontList = Object.keys(textFonts).map(function(k) { return textFonts[k]; });
+            await loadFonts(textFontList);
+          } catch (_) {}
+        }
+      } else {
+        report.errors.push("\"" + node.name + "\": " + msg);
+        break;
+      }
+    }
+  }
+  return applied;
+}
+
+// Recursively apply mode to node and all descendants that support it
+var FRAME_TYPES = { FRAME: 1, COMPONENT: 1, COMPONENT_SET: 1, SECTION: 1, INSTANCE: 1 };
+
+async function applyModeRecursive(node, collection, targetModeId, report) {
+  // Apply to this node if it's a frame-like type
+  if (FRAME_TYPES[node.type]) {
+    await applyModeToNode(node, collection, targetModeId, report);
+  }
+
+  // Recurse into children
+  if ("children" in node) {
+    for (var c = 0; c < node.children.length; c++) {
+      await applyModeRecursive(node.children[c], collection, targetModeId, report);
+    }
+  }
+}
+
 async function reskin(targetBrand) {
   var startTime = Date.now();
   var report = {
@@ -307,7 +354,7 @@ async function reskin(targetBrand) {
   });
   await preloadFontsForTargetMode(cachedCollection, targetModeId);
 
-  figma.skipInvisibleInstanceChildren = true;
+  figma.skipInvisibleInstanceChildren = false; // need to visit ALL nodes
   var pages = figma.root.children;
 
   for (var p = 0; p < pages.length; p++) {
@@ -322,41 +369,9 @@ async function reskin(targetBrand) {
 
     for (var i = 0; i < pg.children.length; i++) {
       var topFrame = pg.children[i];
-      if (
-        topFrame.type === "FRAME" ||
-        topFrame.type === "COMPONENT" ||
-        topFrame.type === "COMPONENT_SET" ||
-        topFrame.type === "SECTION"
-      ) {
-        // Attempt with retry on font errors
-        var applied = false;
-        for (var attempt = 0; attempt < 3 && !applied; attempt++) {
-          try {
-            topFrame.setExplicitVariableModeForCollection(cachedCollection, targetModeId);
-            report.modesSwapped++;
-            report.framesProcessed++;
-            applied = true;
-          } catch (err) {
-            var msg = err.message || "";
-            if (msg.indexOf("unloaded font") !== -1 && attempt < 2) {
-              console.log("[Re-skin] Font error on \"" + topFrame.name + "\", loading fonts (attempt " + (attempt+1) + ")...");
-              // Load fonts mentioned in the error
-              var neededFonts = parseFontsFromError(msg);
-              await loadFonts(neededFonts);
-              // Also load fonts from text nodes in this frame
-              if (attempt === 0) {
-                try {
-                  var textFonts = collectTextFonts(topFrame);
-                  var textFontList = Object.keys(textFonts).map(function(k) { return textFonts[k]; });
-                  await loadFonts(textFontList);
-                } catch (_) {}
-              }
-            } else {
-              report.errors.push("Frame \"" + topFrame.name + "\": " + msg);
-              break;
-            }
-          }
-        }
+      if (FRAME_TYPES[topFrame.type]) {
+        report.framesProcessed++;
+        await applyModeRecursive(topFrame, cachedCollection, targetModeId, report);
       }
     }
     report.pagesProcessed++;
