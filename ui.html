@@ -222,6 +222,10 @@
     <button class="btn-primary" id="btn-reskin" disabled>
       Aplicar re-skin
     </button>
+
+    <button class="btn-secondary" id="btn-cleanup" style="margin-top: 4px; font-size: 11px; color: #C62828;">
+      Limpar modes internos (corrigir lentidão)
+    </button>
   </div>
 
   <div class="progress-section" id="progress-section">
@@ -380,6 +384,11 @@
     document.getElementById("btn-again").addEventListener("click", function() {
       reportSection.classList.remove("active");
       formSection.style.display = "";
+    });
+
+    document.getElementById("btn-cleanup").addEventListener("click", function() {
+      if (!confirm("Isso vai remover modes explícitos de nós internos (deixando só os top-level). Continuar?")) return;
+      parent.postMessage({ pluginMessage: { type: "cleanup" } }, "*");
     });
   </script>
 </body>

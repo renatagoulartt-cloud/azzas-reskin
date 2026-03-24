@@ -1,7 +1,7 @@
 // ============================================================
-// Azzas Re-skin Multi-marca — v13
-// Fix: revert to top-level only (v12 recursive was too slow/heavy)
-// + keep font pre-load + retry on font errors
+// Azzas Re-skin Multi-marca — v14
+// + cleanup function to remove leftover explicit modes from
+//   nested nodes (fixes file slowness from v12 recursive run)
 // ============================================================
 
 figma.showUI(__html__, { width: 400, height: 520, themeColors: true });
@@ -358,6 +358,73 @@ async function reskin(targetBrand) {
   return report;
 }
 
+// ── Cleanup (remove leftover explicit modes from nested nodes) ──
+
+async function cleanupNestedModes() {
+  if (!cachedCollection) return { cleaned: 0, pages: 0, errors: [] };
+
+  var collectionId = cachedCollection.id;
+  var cleaned = 0;
+  var pagesProcessed = 0;
+  var errors = [];
+  var pages = figma.root.children;
+  var BATCH_SIZE = 200; // yield to UI thread every N nodes
+  var processed = 0;
+
+  for (var p = 0; p < pages.length; p++) {
+    var pg = pages[p];
+    figma.ui.postMessage({
+      type: "progress",
+      message: "Limpando " + pg.name + " (" + (p+1) + "/" + pages.length + ")",
+      current: p + 1, total: pages.length,
+    });
+
+    await pg.loadAsync();
+
+    // For each top-level frame, clear modes on ALL descendants (not on the top frame itself)
+    for (var i = 0; i < pg.children.length; i++) {
+      var topFrame = pg.children[i];
+      if (!FRAME_TYPES[topFrame.type] || !("children" in topFrame)) continue;
+
+      // Iterative traversal using a stack (children of top frame only)
+      var stack = [];
+      for (var ci = 0; ci < topFrame.children.length; ci++) {
+        stack.push(topFrame.children[ci]);
+      }
+
+      while (stack.length > 0) {
+        var node = stack.pop();
+
+        // Try to clear explicit mode on this node
+        if (FRAME_TYPES[node.type] || node.type === "INSTANCE") {
+          try {
+            node.clearExplicitVariableModeForCollection(cachedCollection);
+            cleaned++;
+          } catch (_) {
+            // Node might not have an explicit mode — that's fine
+          }
+        }
+
+        // Push children to stack
+        if ("children" in node) {
+          for (var j = 0; j < node.children.length; j++) {
+            stack.push(node.children[j]);
+          }
+        }
+
+        // Yield to UI thread periodically
+        processed++;
+        if (processed % BATCH_SIZE === 0) {
+          await new Promise(function(resolve) { setTimeout(resolve, 0); });
+        }
+      }
+    }
+    pagesProcessed++;
+  }
+
+  return { cleaned: cleaned, pages: pagesProcessed, errors: errors };
+}
+
 // ── Message handler ─────────────────────────────────────────
 
 figma.ui.onmessage = async function(msg) {
@@ -384,6 +451,34 @@ figma.ui.onmessage = async function(msg) {
       }
     } catch (err) {
       figma.ui.postMessage({ type: "error", message: "Erro: " + err.message });
+    }
+  }
+  if (msg.type === "cleanup") {
+    figma.ui.postMessage({
+      type: "progress",
+      message: "Limpando modes internos...",
+      current: 0, total: 1
+    });
+    try {
+      var result = await cleanupNestedModes();
+      figma.ui.postMessage({
+        type: "report",
+        report: {
+          pagesProcessed: result.pages,
+          framesProcessed: 0,
+          modesSwapped: result.cleaned,
+          logosSwapped: 0,
+          warnings: [],
+          errors: result.errors,
+          timeMs: 0,
+        }
+      });
+      figma.notify(
+        "Limpeza concluída! " + result.cleaned + " modes internos removidos.",
+        { timeout: 5000 }
+      );
+    } catch (err) {
+      figma.ui.postMessage({ type: "error", message: "Erro na limpeza: " + err.message });
     }
   }
   if (msg.type === "cancel") { figma.closePlugin(); }
