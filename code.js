@@ -1,7 +1,7 @@
 // ============================================================
-// Azzas Re-skin Multi-marca — v12
-// Fix: apply mode RECURSIVELY to all nested frames/instances
-// + auto-load fonts with retry + try ALL strategies
+// Azzas Re-skin Multi-marca — v13
+// Fix: revert to top-level only (v12 recursive was too slow/heavy)
+// + keep font pre-load + retry on font errors
 // ============================================================
 
 figma.showUI(__html__, { width: 400, height: 520, themeColors: true });
@@ -285,51 +285,28 @@ function findModeByName(brandName) {
   return mode ? mode.modeId : null;
 }
 
+var FRAME_TYPES = { FRAME: 1, COMPONENT: 1, COMPONENT_SET: 1, SECTION: 1 };
+
 // Apply mode to a single node with font-retry logic
-async function applyModeToNode(node, collection, targetModeId, report) {
-  var applied = false;
-  for (var attempt = 0; attempt < 3 && !applied; attempt++) {
+async function applyModeWithRetry(node, collection, targetModeId, report) {
+  for (var attempt = 0; attempt < 3; attempt++) {
     try {
       node.setExplicitVariableModeForCollection(collection, targetModeId);
       report.modesSwapped++;
-      applied = true;
+      return true;
     } catch (err) {
       var msg = err.message || "";
       if (msg.indexOf("unloaded font") !== -1 && attempt < 2) {
-        console.log("[Re-skin] Font error on \"" + node.name + "\", loading fonts (attempt " + (attempt+1) + ")...");
+        console.log("[Re-skin] Font error on \"" + node.name + "\", loading (attempt " + (attempt+1) + ")...");
         var neededFonts = parseFontsFromError(msg);
         await loadFonts(neededFonts);
-        if (attempt === 0) {
-          try {
-            var textFonts = collectTextFonts(node);
-            var textFontList = Object.keys(textFonts).map(function(k) { return textFonts[k]; });
-            await loadFonts(textFontList);
-          } catch (_) {}
-        }
       } else {
-        report.errors.push("\"" + node.name + "\": " + msg);
-        break;
+        report.errors.push("Frame \"" + node.name + "\": " + msg);
+        return false;
       }
     }
   }
-  return applied;
-}
-
-// Recursively apply mode to node and all descendants that support it
-var FRAME_TYPES = { FRAME: 1, COMPONENT: 1, COMPONENT_SET: 1, SECTION: 1, INSTANCE: 1 };
-
-async function applyModeRecursive(node, collection, targetModeId, report) {
-  // Apply to this node if it's a frame-like type
-  if (FRAME_TYPES[node.type]) {
-    await applyModeToNode(node, collection, targetModeId, report);
-  }
-
-  // Recurse into children
-  if ("children" in node) {
-    for (var c = 0; c < node.children.length; c++) {
-      await applyModeRecursive(node.children[c], collection, targetModeId, report);
-    }
-  }
+  return false;
 }
 
 async function reskin(targetBrand) {
@@ -354,7 +331,7 @@ async function reskin(targetBrand) {
   });
   await preloadFontsForTargetMode(cachedCollection, targetModeId);
 
-  figma.skipInvisibleInstanceChildren = false; // need to visit ALL nodes
+  figma.skipInvisibleInstanceChildren = true;
   var pages = figma.root.children;
 
   for (var p = 0; p < pages.length; p++) {
@@ -371,7 +348,7 @@ async function reskin(targetBrand) {
       var topFrame = pg.children[i];
       if (FRAME_TYPES[topFrame.type]) {
         report.framesProcessed++;
-        await applyModeRecursive(topFrame, cachedCollection, targetModeId, report);
+        await applyModeWithRetry(topFrame, cachedCollection, targetModeId, report);
       }
     }
     report.pagesProcessed++;
