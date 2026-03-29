@@ -361,11 +361,11 @@ async function reskin(targetBrand) {
 // ── Cleanup (remove leftover explicit modes from nested nodes) ──
 
 async function cleanupNestedModes() {
-  if (!cachedCollection) return { cleaned: 0, pages: 0, errors: [] };
+  if (!cachedCollection) return { cleaned: 0, pages: 0, totalNodes: 0, errors: [] };
 
-  var collectionId = cachedCollection.id;
   var cleaned = 0;
   var pagesProcessed = 0;
+  var totalNodes = 0;
   var errors = [];
   var pages = figma.root.children;
   var BATCH_SIZE = 200; // yield to UI thread every N nodes
@@ -384,7 +384,7 @@ async function cleanupNestedModes() {
     // For each top-level frame, clear modes on ALL descendants (not on the top frame itself)
     for (var i = 0; i < pg.children.length; i++) {
       var topFrame = pg.children[i];
-      if (!FRAME_TYPES[topFrame.type] || !("children" in topFrame)) continue;
+      if (!("children" in topFrame)) continue;
 
       // Iterative traversal using a stack (children of top frame only)
       var stack = [];
@@ -394,15 +394,28 @@ async function cleanupNestedModes() {
 
       while (stack.length > 0) {
         var node = stack.pop();
+        totalNodes++;
 
-        // Try to clear explicit mode on this node
-        if (FRAME_TYPES[node.type] || node.type === "INSTANCE") {
-          try {
-            node.clearExplicitVariableModeForCollection(cachedCollection);
-            cleaned++;
-          } catch (_) {
-            // Node might not have an explicit mode — that's fine
+        // Check if this node has ANY explicit variable modes set
+        try {
+          var explicitModes = node.explicitVariableModes;
+          if (explicitModes) {
+            var collectionIds = Object.keys(explicitModes);
+            for (var cm = 0; cm < collectionIds.length; cm++) {
+              try {
+                var tempColl = await safeGetCollection(collectionIds[cm]);
+                if (tempColl) {
+                  node.clearExplicitVariableModeForCollection(tempColl);
+                  cleaned++;
+                  console.log("[Cleanup] Cleared mode on \"" + node.name + "\" (type: " + node.type + ", collection: " + collectionIds[cm] + ")");
+                }
+              } catch (clearErr) {
+                // Ignore — node may not support clearing
+              }
+            }
           }
+        } catch (_) {
+          // explicitVariableModes not supported on this node type
         }
 
         // Push children to stack
@@ -422,7 +435,8 @@ async function cleanupNestedModes() {
     pagesProcessed++;
   }
 
-  return { cleaned: cleaned, pages: pagesProcessed, errors: errors };
+  console.log("[Cleanup] Done. Scanned " + totalNodes + " nodes, cleared " + cleaned + " explicit modes across " + pagesProcessed + " pages.");
+  return { cleaned: cleaned, pages: pagesProcessed, totalNodes: totalNodes, errors: errors };
 }
 
 // ── Message handler ─────────────────────────────────────────
@@ -460,21 +474,23 @@ figma.ui.onmessage = async function(msg) {
       current: 0, total: 1
     });
     try {
+      var cleanStart = Date.now();
       var result = await cleanupNestedModes();
+      var cleanTime = Date.now() - cleanStart;
       figma.ui.postMessage({
         type: "report",
         report: {
           pagesProcessed: result.pages,
-          framesProcessed: 0,
+          framesProcessed: result.totalNodes,
           modesSwapped: result.cleaned,
           logosSwapped: 0,
           warnings: [],
           errors: result.errors,
-          timeMs: 0,
+          timeMs: cleanTime,
         }
       });
       figma.notify(
-        "Limpeza concluída! " + result.cleaned + " modes internos removidos.",
+        "Limpeza concluída! " + result.cleaned + " modes removidos de " + result.totalNodes + " nós analisados.",
         { timeout: 5000 }
       );
     } catch (err) {
